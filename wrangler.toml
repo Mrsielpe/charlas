@@ -2,10 +2,22 @@ name = "charlas-rioloa"
 compatibility_date = "2026-06-01"
 pages_build_output_dir = "."
 
-# Base de datos D1 (memoria central). Para producción, el id real se obtiene al
-# crear la base ("npx wrangler d1 create charlas-rioloa" o desde el panel) y se
-# vincula a Pages en Settings → Functions → D1 database bindings (variable: DB).
-[[d1_databases]]
-binding = "DB"
-database_name = "charlas-rioloa"
-database_id = "00000000-0000-0000-0000-000000000000"
+# ─────────────────────────────────────────────────────────────────────
+#  MEMORIA EN LA NUBE (Cloudflare D1)  —  DESACTIVADA por ahora
+# ─────────────────────────────────────────────────────────────────────
+# La app publica y funciona en MODO LOCAL sin esto (datos en el navegador).
+#
+# Para ACTIVAR la memoria central (verla desde cualquier equipo):
+#   1) En Cloudflare: Workers & Pages -> D1 -> Create database -> "charlas-rioloa".
+#      Copia el "Database ID" que muestra.
+#   2) Descomenta las 4 líneas de abajo y pega el ID real en database_id.
+#   3) En la base D1 -> pestaña Console: pega y ejecuta el contenido de schema.sql.
+#   4) En el proyecto Pages -> Settings -> Environment variables: crea APP_CLAVE
+#      con una clave a tu gusto.
+#   5) Haz push (o Retry deployment). Luego abre la app -> ícono de nube -> ingresa
+#      la misma APP_CLAVE. Debe quedar "Cargado de la nube" en verde.
+#
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "charlas-rioloa"
+# database_id = "PEGA-AQUI-EL-ID-REAL"

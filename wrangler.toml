@@ -1,0 +1,11 @@
+name = "charlas-rioloa"
+compatibility_date = "2026-06-01"
+pages_build_output_dir = "."
+
+# Base de datos D1 (memoria central). Para producción, el id real se obtiene al
+# crear la base ("npx wrangler d1 create charlas-rioloa" o desde el panel) y se
+# vincula a Pages en Settings → Functions → D1 database bindings (variable: DB).
+[[d1_databases]]
+binding = "DB"
+database_name = "charlas-rioloa"
+database_id = "00000000-0000-0000-0000-000000000000"

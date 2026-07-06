@@ -388,7 +388,7 @@
         // ───────────────────────── ESTADO PERSISTENTE ─────────────────────────
         const defaultStore = () => ({
             supervisores: SUPERVISORES_INICIALES,
-            charlas: TEMAS.map((t, i) => ({ id: i + 1, numero: t.n, titulo: t.titulo, desarrollo: t.desarrollo, puntos: t.puntos, duracion: '5 minutos', estado: 'activa', preguntas: (EVALUACIONES[t.n] || {}).preguntas || [], compromiso: (EVALUACIONES[t.n] || {}).compromiso || [], ampliado: (EVALUACIONES[t.n] || {}).ampliado || '' })),
+            charlas: TEMAS.map((t, i) => ({ id: i + 1, numero: t.n, baseKey: t.n, titulo: t.titulo, desarrollo: t.desarrollo, puntos: t.puntos, duracion: '5 minutos', estado: 'activa', preguntas: (EVALUACIONES[t.n] || {}).preguntas || [], compromiso: (EVALUACIONES[t.n] || {}).compromiso || [], ampliado: (EVALUACIONES[t.n] || {}).ampliado || '' })),
             // programa[anio] = [{ semana, supervisorId, charlaId, charlaOriginalId, motivo,
             //                     estado: programada|entregada|cumplida|no_cumplida, folio, fechaEntrega, fechaCharla }]
             programa: {},
@@ -398,6 +398,28 @@
             version: '01',
             metaMensual: 4,
         });
+
+        // Fusiona el catálogo base del código (TEMAS) con el store guardado, SIN perder nada:
+        // - conserva todas las charlas del usuario y sus ediciones (identidad por baseKey, no por título);
+        // - al actualizar la app, agrega automáticamente las charlas base nuevas que aún no tienes.
+        // Así nunca hay que borrar el almacenamiento para ver contenido nuevo, y tus charlas propias se mantienen.
+        const normTit = (s) => String(s || '').trim().toLowerCase();
+        const fusionarCatalogo = (st) => {
+            if (!st || !Array.isArray(st.charlas)) return st;
+            const charlas = st.charlas.map(c => ({ ...c }));
+            // Retrocompatibilidad: a las charlas base viejas (sin baseKey) les asignamos su clave por título.
+            const keyPorTitulo = {}; TEMAS.forEach(t => { keyPorTitulo[normTit(t.titulo)] = t.n; });
+            charlas.forEach(c => { if (c.baseKey == null && keyPorTitulo[normTit(c.titulo)] != null) c.baseKey = keyPorTitulo[normTit(c.titulo)]; });
+            const yaTengo = new Set(charlas.filter(c => c.baseKey != null).map(c => c.baseKey));
+            let maxId = Math.max(0, ...charlas.map(c => c.id || 0));
+            let maxN = Math.max(0, ...charlas.filter(c => c.estado === 'activa').map(c => c.numero || 0));
+            const faltantes = TEMAS.filter(t => !yaTengo.has(t.n)).map(t => ({
+                id: ++maxId, numero: ++maxN, baseKey: t.n, titulo: t.titulo, desarrollo: t.desarrollo,
+                puntos: t.puntos, duracion: '5 minutos', estado: 'activa',
+                preguntas: (EVALUACIONES[t.n] || {}).preguntas || [], compromiso: (EVALUACIONES[t.n] || {}).compromiso || [], ampliado: (EVALUACIONES[t.n] || {}).ampliado || ''
+            }));
+            return faltantes.length ? { ...st, charlas: [...charlas, ...faltantes] } : { ...st, charlas };
+        };
 
         // ───────────────────────── ICONOS ─────────────────────────
         const I = ({ children, size = 20, className = "" }) => (
@@ -567,10 +589,11 @@
                 pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(0, 0, 0);
                 pdf.text('Temas Tratados:', ML, y);
                 y += 5.5;
-                for (let i = 0; i < 5; i++) {
-                    const p = (charla.puntos || [])[i];
-                    if (p) { pdf.splitTextToSize('-   ' + p, CW - 12).forEach((l, k) => { pdf.text(l, ML + 8 + (k ? 3.5 : 0), y); y += 4.6; }); }
-                    else { pdf.text('-', ML + 8, y); y += 4.6; }
+                const lista = (charla.puntos || []).filter(Boolean);
+                if (lista.length) {
+                    lista.forEach(p => { pdf.splitTextToSize('-   ' + p, CW - 12).forEach((l, k) => { pdf.text(l, ML + 8 + (k ? 3.5 : 0), y); y += 4.6; }); });
+                } else {
+                    pdf.text('-', ML + 8, y); y += 4.6;
                 }
                 y += 4;
 
@@ -637,18 +660,22 @@
                 pdf.splitTextToSize(charla.desarrollo || '—', CW).forEach(l => { pdf.text(l, ML, y2); y2 += 5.1; });
                 y2 += 5;
 
-                if ((charla.puntos || []).length) {
+                // Salto de página cuando el contenido de apoyo no cabe (usado por puntos y por la pauta).
+                const ensureApoyo = (n) => { if (y2 + n > PH - 14) { pdf.addPage(); drawEncabezado(item); pageFolio[pdf.internal.getNumberOfPages()] = item.folio; y2 = 30; } };
+                if ((charla.puntos || []).filter(Boolean).length) {
+                    ensureApoyo(11);
                     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(100, 100, 100);
                     pdf.text('PUNTOS CLAVE', ML, y2); y2 += 5.5;
                     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10); pdf.setTextColor(30, 30, 30);
-                    charla.puntos.forEach(p => {
-                        pdf.splitTextToSize('•  ' + p, CW - 4).forEach((l, k) => { pdf.text(l, ML + (k ? 4 : 0), y2); y2 += 5.1; });
+                    charla.puntos.filter(Boolean).forEach(p => {
+                        const lineas = pdf.splitTextToSize('•  ' + p, CW - 4);
+                        ensureApoyo(lineas.length * 5.1);
+                        lineas.forEach((l, k) => { pdf.text(l, ML + (k ? 4 : 0), y2); y2 += 5.1; });
                     });
                 }
                 y2 += 5;
 
                 // Pauta de evaluación para el relator (pregunta + respuesta correcta) — apoya y agiliza la corrección
-                const ensureApoyo = (n) => { if (y2 + n > PH - 14) { pdf.addPage(); drawEncabezado(item); pageFolio[pdf.internal.getNumberOfPages()] = item.folio; y2 = 30; } };
                 if ((charla.preguntas || []).length) {
                     ensureApoyo(12);
                     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8); pdf.setTextColor(100, 100, 100);
@@ -859,7 +886,7 @@
         const App = () => {
             const [store, setStore] = useState(() => {
                 const base = defaultStore();
-                try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) return { ...base, ...JSON.parse(raw) }; } catch (e) {}
+                try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) return fusionarCatalogo({ ...base, ...JSON.parse(raw) }); } catch (e) {}
                 return base;
             });
             const [escalaIdx, setEscalaIdx] = useState(() => { try { return Math.min(2, Math.max(0, parseInt(localStorage.getItem('rioloa_prog_escala') || '0', 10) || 0)); } catch (e) { return 0; } });
@@ -893,7 +920,7 @@
                     const data = await NUBE.get();
                     if (data && data.json) {
                         saltarPush.current = true;
-                        setStore({ ...defaultStore(), ...data.json });
+                        setStore(fusionarCatalogo({ ...defaultStore(), ...data.json }));
                         setNube({ modo: 'ok', updated: data.updated }); setSaveNote('Cargado de la nube');
                     } else {
                         setNube({ modo: 'ok', updated: null });
@@ -990,6 +1017,24 @@
                     window.open(pdf.output('bloburl'), '_blank');
                 } catch (e) { aviso('Error con el PDF: ' + e.message); }
             };
+            // Impresión SUELTA: imprime cualquier charla eligiendo relator, sin programarla.
+            const imprimirSuelta = (charla, supervisorId, soloPreview) => {
+                const sup = store.supervisores.find(s => s.id === supervisorId);
+                if (!sup) { aviso('Elige quién relata la charla.'); return; }
+                if (!charla) { aviso('No se encontró la charla.'); return; }
+                const { semana, anio: anioHoy } = semanaISO(hoyISO());
+                let folio = 'BORRADOR';
+                if (!soloPreview) {
+                    folio = `CH-${anioHoy}-${String(store.folioSeq).padStart(3, '0')}`;
+                    setStore(prev => ({ ...prev, folioSeq: prev.folioSeq + 1 }));
+                }
+                try {
+                    const pdf = buildPDF({ supervisor: sup, charla, folio, config, anio: anioHoy, semana });
+                    if (!soloPreview) pdf.autoPrint();
+                    window.open(pdf.output('bloburl'), '_blank');
+                } catch (e) { aviso('Error con el PDF: ' + e.message); return; }
+                if (!soloPreview) aviso(`✓ Hoja impresa (folio ${folio}) para ${sup.nombre}.`);
+            };
             // Impresión del mes completo (todas las hojas del mes en un PDF)
             const imprimirMes = (mes, soloPreview) => {
                 const delMes = (filas || []).filter(f => mesDeSemana(anio, f.semana) === mes)
@@ -1053,7 +1098,7 @@
                 const f = e.target.files[0]; e.target.value = '';
                 if (!f) return;
                 const r = new FileReader();
-                r.onload = () => { try { const obj = JSON.parse(r.result); if (!obj || !obj.programa || !obj.charlas) throw new Error('Archivo no válido'); if (confirm('¿Reemplazar los datos actuales con el respaldo?')) setStore({ ...defaultStore(), ...obj }); } catch (err) { alert('No se pudo leer el respaldo: ' + err.message); } };
+                r.onload = () => { try { const obj = JSON.parse(r.result); if (!obj || !obj.programa || !obj.charlas) throw new Error('Archivo no válido'); if (confirm('¿Reemplazar los datos actuales con el respaldo?')) setStore(fusionarCatalogo({ ...defaultStore(), ...obj })); } catch (err) { alert('No se pudo leer el respaldo: ' + err.message); } };
                 r.readAsText(f);
             };
 
@@ -1096,7 +1141,7 @@
                         {tab === 'tablero' && <TabTablero filas={filas} anio={anio} semanaActual={semanaActual} store={store} charlaDe={charlaDe} exportarCSV={exportarCSV} />}
                         {tab === 'programa' && <TabPrograma filas={filas} anio={anio} semanaActual={semanaActual} store={store} activas={activas} charlaDe={charlaDe}
                             generarPrograma={generarPrograma} reemplazar={reemplazar} restaurar={restaurar} />}
-                        {tab === 'charlas' && <TabCharlas store={store} setStore={setStore} aviso={aviso} />}
+                        {tab === 'charlas' && <TabCharlas store={store} setStore={setStore} aviso={aviso} imprimirSuelta={imprimirSuelta} />}
                         {tab === 'ajustes' && <TabAjustes store={store} setStore={setStore} aviso={aviso} exportarRespaldo={exportarRespaldo} importarRespaldo={importarRespaldo} nube={nube} abrirClave={() => setClaveModal(true)} sincronizar={() => pushNube(store)} reconectar={enlazarNube} />}
 
                         {/* Tamaño de letra */}
@@ -1399,19 +1444,55 @@
         };
 
         // ── TAB: Charlas (catálogo) ──
-        const TabCharlas = ({ store, setStore, aviso }) => {
-            const [nueva, setNueva] = useState({ titulo: '', desarrollo: '', puntos: '', duracion: '5 minutos' });
+        // Editor dinámico de "temas tratados / puntos clave": agregar de a uno, editar en línea,
+        // borrar y reordenar. Sin tope de cantidad. `puntos` es un arreglo de strings.
+        const EditorPuntos = ({ puntos, onChange }) => {
+            const [nuevo, setNuevo] = useState('');
+            const lista = puntos || [];
+            const agregar = () => { const t = nuevo.trim(); if (!t) return; onChange([...lista, t]); setNuevo(''); };
+            const editar = (i, v) => onChange(lista.map((p, k) => k === i ? v : p));
+            const borrar = (i) => onChange(lista.filter((_, k) => k !== i));
+            const mover = (i, d) => { const j = i + d; if (j < 0 || j >= lista.length) return; const a = lista.slice(); const tmp = a[i]; a[i] = a[j]; a[j] = tmp; onChange(a); };
+            const btnMini = "flex items-center justify-center w-8 h-8 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent shrink-0";
+            return (
+                <div className="space-y-2">
+                    {lista.length === 0 && <p className="text-xs text-slate-400 italic">Aún no agregaste puntos. Escribe uno abajo y presiona <b>Agregar</b>.</p>}
+                    {lista.map((p, i) => (
+                        <div key={i} className="flex items-center gap-1.5">
+                            <span className="text-xs font-black text-slate-400 w-5 text-right shrink-0">{i + 1}.</span>
+                            <input className={`${inputCls} !py-2 !text-sm`} value={p} onChange={e => editar(i, e.target.value)} />
+                            <button type="button" onClick={() => mover(i, -1)} disabled={i === 0} title="Subir" className={btnMini}><Chevron dir="l" size={15} className="-rotate-90" /></button>
+                            <button type="button" onClick={() => mover(i, 1)} disabled={i === lista.length - 1} title="Bajar" className={btnMini}><Chevron dir="r" size={15} className="rotate-90" /></button>
+                            <button type="button" onClick={() => borrar(i)} title="Borrar punto" className={`${btnMini} !text-red-500 hover:!bg-red-50 hover:!border-red-200`}><X size={15} /></button>
+                        </div>
+                    ))}
+                    <div className="flex items-center gap-1.5 pt-1">
+                        <span className="w-5 shrink-0" />
+                        <input className={`${inputCls} !py-2 !text-sm`} value={nuevo} onChange={e => setNuevo(e.target.value)} placeholder="Escribe un punto y presiona Agregar (o Enter)" onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); agregar(); } }} />
+                        <BotonTeal onClick={agregar} className="!py-2 !px-3 shrink-0 text-xs">+ Agregar</BotonTeal>
+                    </div>
+                </div>
+            );
+        };
+
+        const TabCharlas = ({ store, setStore, aviso, imprimirSuelta }) => {
+            const [nueva, setNueva] = useState({ titulo: '', desarrollo: '', puntos: [], duracion: '5 minutos' });
             const [editando, setEditando] = useState(null);
+            const [imprimiendo, setImprimiendo] = useState(null); // { charla, supervisorId }
             const activas = store.charlas.filter(c => c.estado === 'activa');
+            const abrirImpresion = (c) => {
+                if (!store.supervisores.length) { aviso('Primero agrega supervisores en Ajustes.'); return; }
+                setImprimiendo({ charla: c, supervisorId: store.supervisores[0].id });
+            };
 
             const crear = () => {
                 if (!nueva.titulo || !nueva.desarrollo) { aviso('La charla necesita título y desarrollo.'); return; }
                 setStore(prev => {
                     const maxId = Math.max(0, ...prev.charlas.map(c => c.id));
                     const maxN = Math.max(0, ...prev.charlas.filter(c => c.estado === 'activa').map(c => c.numero || 0));
-                    return { ...prev, charlas: [...prev.charlas, { id: maxId + 1, numero: maxN + 1, titulo: nueva.titulo, desarrollo: nueva.desarrollo, puntos: nueva.puntos.split('\n').map(s => s.trim()).filter(Boolean).slice(0, 5), duracion: nueva.duracion || '5 minutos', estado: 'activa' }] };
+                    return { ...prev, charlas: [...prev.charlas, { id: maxId + 1, numero: maxN + 1, titulo: nueva.titulo, desarrollo: nueva.desarrollo, puntos: (nueva.puntos || []).map(s => s.trim()).filter(Boolean), duracion: nueva.duracion || '5 minutos', estado: 'activa', preguntas: [], compromiso: [], ampliado: '' }] };
                 });
-                setNueva({ titulo: '', desarrollo: '', puntos: '', duracion: '5 minutos' });
+                setNueva({ titulo: '', desarrollo: '', puntos: [], duracion: '5 minutos' });
                 aviso('✓ Charla creada. Ya puedes usarla en reemplazos o al completar semanas.');
             };
             const archivar = (c) => {
@@ -1419,23 +1500,20 @@
                 setStore(prev => ({ ...prev, charlas: prev.charlas.map(x => x.id === c.id ? { ...x, estado: 'archivada' } : x) }));
             };
             const guardarEdicion = () => {
-                setStore(prev => ({ ...prev, charlas: prev.charlas.map(x => x.id === editando.id ? { ...x, titulo: editando.titulo, desarrollo: editando.desarrollo, puntos: editando.puntos.split('\n').map(s => s.trim()).filter(Boolean).slice(0, 5), duracion: editando.duracion || '5 minutos' } : x) }));
+                setStore(prev => ({ ...prev, charlas: prev.charlas.map(x => x.id === editando.id ? { ...x, titulo: editando.titulo, desarrollo: editando.desarrollo, puntos: (editando.puntos || []).map(s => s.trim()).filter(Boolean), duracion: editando.duracion || '5 minutos' } : x) }));
                 setEditando(null); aviso('✓ Charla actualizada.');
             };
+            // Identidad estable: una charla base está presente si alguna charla tiene su baseKey,
+            // o (charlas viejas) si su título coincide. Así no se duplican charlas base renombradas.
+            const tieneBase = (t) => store.charlas.some(c => c.baseKey === t.n || (c.baseKey == null && normTit(c.titulo) === normTit(t.titulo)));
+            const faltantesBase = TEMAS.filter(t => !tieneBase(t));
+            const faltanBase = faltantesBase.length;
             const reponerCatalogo = () => {
-                const titulos = new Set(store.charlas.map(c => c.titulo.trim().toLowerCase()));
-                const faltantes = TEMAS.filter(t => !titulos.has(t.titulo.trim().toLowerCase()));
-                if (!faltantes.length) { aviso('El catálogo ya incluye todas las charlas base.'); return; }
-                if (!confirm(`Se agregarán ${faltantes.length} charla(s) del catálogo base que hoy no tienes. Tus charlas y tu programa no se modifican. ¿Continuar?`)) return;
-                setStore(prev => {
-                    let maxId = Math.max(0, ...prev.charlas.map(c => c.id));
-                    let maxN = Math.max(0, ...prev.charlas.filter(c => c.estado === 'activa').map(c => c.numero || 0));
-                    const nuevas = faltantes.map(t => ({ id: ++maxId, numero: ++maxN, titulo: t.titulo, desarrollo: t.desarrollo, puntos: t.puntos, duracion: '5 minutos', estado: 'activa' }));
-                    return { ...prev, charlas: [...prev.charlas, ...nuevas] };
-                });
-                aviso(`✓ Se agregaron ${faltantes.length} charla(s) del catálogo base.`);
+                if (!faltanBase) { aviso('El catálogo ya incluye todas las charlas base.'); return; }
+                if (!confirm(`Se agregarán ${faltanBase} charla(s) del catálogo base que hoy no tienes. Tus charlas y tu programa no se modifican. ¿Continuar?`)) return;
+                setStore(prev => fusionarCatalogo(prev));
+                aviso(`✓ Se agregaron ${faltanBase} charla(s) del catálogo base.`);
             };
-            const faltanBase = TEMAS.filter(t => !store.charlas.some(c => c.titulo.trim().toLowerCase() === t.titulo.trim().toLowerCase())).length;
 
             return (
                 <div className="space-y-5">
@@ -1446,7 +1524,7 @@
                                 <div><Label>Duración</Label><input className={inputCls} value={nueva.duracion} onChange={e => setNueva(p => ({ ...p, duracion: e.target.value }))} placeholder="Ej: 5 minutos" /></div>
                             </div>
                             <div><Label>Desarrollo (lo que se lee a la cuadrilla)</Label><textarea className={`${inputCls} h-36`} value={nueva.desarrollo} onChange={e => setNueva(p => ({ ...p, desarrollo: e.target.value }))} /></div>
-                            <div><Label>Temas tratados / puntos clave (uno por línea, hasta 5)</Label><textarea className={`${inputCls} h-24`} value={nueva.puntos} onChange={e => setNueva(p => ({ ...p, puntos: e.target.value }))} placeholder="Escribe hasta 5 temas, uno por línea" /></div>
+                            <div><Label>Temas tratados / puntos clave (agrega los que quieras, sin límite)</Label><EditorPuntos puntos={nueva.puntos} onChange={pts => setNueva(p => ({ ...p, puntos: pts }))} /></div>
                             <BotonTeal onClick={crear} className="w-full">Crear charla</BotonTeal>
                         </div>
                     </Section>
@@ -1458,17 +1536,45 @@
                             {activas.map(c => (
                                 <div key={c.id} className="border border-slate-200 rounded-xl p-4 bg-white">
                                     <div className="flex items-start justify-between gap-2">
-                                        <div className="font-bold text-slate-700">{c.numero ? `N° ${c.numero} — ` : ''}{c.titulo}</div>
+                                        <div className="font-bold text-slate-700">
+                                            {c.numero ? `N° ${c.numero} — ` : ''}{c.titulo}
+                                            {!c.baseKey && <span className="ml-2 align-middle text-[10px] font-black uppercase tracking-wide px-1.5 py-0.5 rounded" style={{ background: '#e0f2f1', color: TEAL }}>Tuya</span>}
+                                        </div>
                                         <div className="flex gap-2 shrink-0">
-                                            <button onClick={() => setEditando({ id: c.id, titulo: c.titulo, desarrollo: c.desarrollo, puntos: (c.puntos || []).join('\n'), duracion: c.duracion || '5 minutos' })} className="text-xs font-bold text-sky-600 hover:underline">Editar</button>
+                                            <button onClick={() => abrirImpresion(c)} className="flex items-center gap-1 text-xs font-black uppercase tracking-wide px-2.5 py-1 rounded-lg text-white" style={{ background: TEAL }}><Printer size={12} /> Imprimir</button>
+                                            <button onClick={() => setEditando({ id: c.id, titulo: c.titulo, desarrollo: c.desarrollo, puntos: (c.puntos || []).slice(), duracion: c.duracion || '5 minutos' })} className="text-xs font-bold text-sky-600 hover:underline">Editar</button>
                                             <button onClick={() => archivar(c)} className="text-xs font-bold text-red-500 hover:underline">Archivar</button>
                                         </div>
                                     </div>
                                     <p className="text-sm text-slate-500 mt-2 line-clamp-2">{c.desarrollo}</p>
+                                    <p className="text-[11px] text-slate-400 mt-1.5">{(c.puntos || []).filter(Boolean).length} punto(s) tratado(s)</p>
                                 </div>
                             ))}
                         </div>
                     </Section>
+
+                    {imprimiendo && (
+                        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setImprimiendo(null)}>
+                            <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
+                                <div>
+                                    <h3 className="font-black uppercase text-slate-700 text-sm">Imprimir charla suelta</h3>
+                                    <p className="text-sm text-slate-500 mt-1">{imprimiendo.charla.numero ? `N° ${imprimiendo.charla.numero} — ` : ''}{imprimiendo.charla.titulo}</p>
+                                </div>
+                                <div>
+                                    <Label>¿Quién la relata?</Label>
+                                    <select className={inputCls} value={imprimiendo.supervisorId} onChange={e => setImprimiendo(p => ({ ...p, supervisorId: e.target.value }))}>
+                                        {store.supervisores.map(s => <option key={s.id} value={s.id}>{s.nombre}{s.cargo ? ` — ${s.cargo}` : ''}</option>)}
+                                    </select>
+                                    <p className="text-[11px] text-slate-400 mt-1.5">Se genera la hoja con folio nuevo, sin agregarla al programa anual.</p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <BotonTeal onClick={() => { imprimirSuelta(imprimiendo.charla, imprimiendo.supervisorId, false); setImprimiendo(null); }} className="flex-1"><Printer size={15} /> Imprimir hoja</BotonTeal>
+                                    <button onClick={() => imprimirSuelta(imprimiendo.charla, imprimiendo.supervisorId, true)} className="flex items-center gap-1 px-3 rounded-xl border border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-100"><Eye size={13} /> Vista previa</button>
+                                    <button onClick={() => setImprimiendo(null)} className="px-4 rounded-xl border border-slate-300 text-sm font-bold text-slate-500">Cerrar</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {editando && (
                         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setEditando(null)}>
@@ -1479,7 +1585,7 @@
                                     <div><Label>Duración</Label><input className={inputCls} value={editando.duracion} onChange={e => setEditando(p => ({ ...p, duracion: e.target.value }))} placeholder="Ej: 5 minutos" /></div>
                                 </div>
                                 <div><Label>Desarrollo</Label><textarea className={`${inputCls} h-48`} value={editando.desarrollo} onChange={e => setEditando(p => ({ ...p, desarrollo: e.target.value }))} /></div>
-                                <div><Label>Temas tratados / puntos clave (uno por línea, hasta 5)</Label><textarea className={`${inputCls} h-24`} value={editando.puntos} onChange={e => setEditando(p => ({ ...p, puntos: e.target.value }))} /></div>
+                                <div><Label>Temas tratados / puntos clave (agrega, edita, borra o reordena)</Label><EditorPuntos puntos={editando.puntos} onChange={pts => setEditando(p => ({ ...p, puntos: pts }))} /></div>
                                 <div className="flex gap-2">
                                     <BotonTeal onClick={guardarEdicion} className="flex-1">Guardar</BotonTeal>
                                     <button onClick={() => setEditando(null)} className="px-4 rounded-xl border border-slate-300 text-sm font-bold text-slate-500">Cancelar</button>

@@ -1,0 +1,14 @@
+name = "charlas-rioloa-api"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Base de datos D1 — reemplaza database_id con el que te entrega:
+#   wrangler d1 create charlas-rioloa
+[[d1_databases]]
+binding = "DB"
+database_name = "charlas-rioloa"
+database_id = "RELLENAR-CON-EL-ID-DE-D1"
+
+# Token para proteger las escrituras. NO lo pongas aquí; configúralo como secret:
+#   wrangler secret put API_TOKEN
+# (si no defines API_TOKEN, la API queda abierta — úsalo solo para pruebas)
